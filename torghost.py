@@ -12,7 +12,7 @@ from stem import Signal
 from stem.control import Controller
 from packaging import version
 
-VERSION = "3.1.1"
+VERSION = "3.1.1-invelsec(docker)"
 
 IP_API = "https://api.ipify.org/?format=json"
 
@@ -82,10 +82,13 @@ def ip():
     return ipTxt
 
 
-def check_root():
-    if os.geteuid() != 0:
-        print("You must be root; Say the magic word 'sudo'")
-        sys.exit(0)
+def check_root() -> bool:
+    who = os.popen("whoami").read()
+    if who == "root" or who == "root\n":    
+        return True
+    else:
+        print("You must be root; Say the magic word 'sudo' or use 'root' user.")
+        return False
 
 
 signal.signal(signal.SIGINT, sigint_handler)
@@ -107,88 +110,96 @@ resolv = '/etc/resolv.conf'
 
 
 def start_torghost():
-    print(t() + ' Always check for updates using -u option')
-    os.system('sudo cp /etc/resolv.conf /etc/resolv.conf.bak')
-    if os.path.exists(Torrc) and TorrcCfgString in open(Torrc).read():
-        print(t() + ' Torrc file already configured')
+    check_root_user = check_root()
+    if check_root_user:
+        print(t() + ' Always check for updates using -u option')
+        os.system('cp /etc/resolv.conf /etc/resolv.conf.bak')
+        if os.path.exists(Torrc) and TorrcCfgString in open(Torrc).read():
+            print(t() + ' Torrc file already configured')
+        else:
+
+            with open(Torrc, 'w') as myfile:
+                print(t() + ' Writing torcc file ')
+                myfile.write(TorrcCfgString)
+                print(bcolors.GREEN + '[done]' + bcolors.ENDC)
+        if resolvString in open(resolv).read():
+            print(t() + ' DNS resolv.conf file already configured')
+        else:
+            with open(resolv, 'w') as myfile:
+                print(t() + ' Configuring DNS resolv.conf file.. '),
+                myfile.write(resolvString)
+                print(bcolors.GREEN + '[done]' + bcolors.ENDC)
+
+        print(t() + ' Stopping tor service '),
+        os.system('service tor stop')
+        os.system('fuser -k 9051/tcp > /dev/null 2>&1')
+        print(bcolors.GREEN + '[done]' + bcolors.ENDC)
+        print(t() + ' Starting new tor daemon '),
+        os.system('tor -f /etc/tor/torghostrc > /dev/null'
+                )
+        print(bcolors.GREEN + '[done]' + bcolors.ENDC)
+        print(t() + ' setting up iptables rules'),
+
+        iptables_rules = \
+            """
+        NON_TOR="192.168.1.0/24 192.168.0.0/24"
+        TOR_UID=%s
+        TRANS_PORT="9040"
+
+        iptables -F
+        iptables -t nat -F
+
+        iptables -t nat -A OUTPUT -m owner --uid-owner $TOR_UID -j RETURN
+        iptables -t nat -A OUTPUT -p udp --dport 53 -j REDIRECT --to-ports 5353
+        for NET in $NON_TOR 127.0.0.0/9 127.128.0.0/10; do
+        iptables -t nat -A OUTPUT -d $NET -j RETURN
+        done
+        iptables -t nat -A OUTPUT -p tcp --syn -j REDIRECT --to-ports $TRANS_PORT
+
+        iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+        for NET in $NON_TOR 127.0.0.0/8; do
+        iptables -A OUTPUT -d $NET -j ACCEPT
+        done
+        iptables -A OUTPUT -m owner --uid-owner $TOR_UID -j ACCEPT
+        iptables -A OUTPUT -j REJECT
+        """ \
+            % subprocess.getoutput('id -ur debian-tor')
+
+        os.system(iptables_rules)
+        print(bcolors.GREEN + '[done]' + bcolors.ENDC)
+        print(t() + ' Fetching current IP...')
+        #print(t() + ' CURRENT IP : ' + bcolors.GREEN + ip() + bcolors.ENDC)
     else:
-
-        with open(Torrc, 'w') as myfile:
-            print(t() + ' Writing torcc file ')
-            myfile.write(TorrcCfgString)
-            print(bcolors.GREEN + '[done]' + bcolors.ENDC)
-    if resolvString in open(resolv).read():
-        print(t() + ' DNS resolv.conf file already configured')
-    else:
-        with open(resolv, 'w') as myfile:
-            print(t() + ' Configuring DNS resolv.conf file.. '),
-            myfile.write(resolvString)
-            print(bcolors.GREEN + '[done]' + bcolors.ENDC)
-
-    print(t() + ' Stopping tor service '),
-    os.system('sudo systemctl stop tor')
-    os.system('sudo fuser -k 9051/tcp > /dev/null 2>&1')
-    print(bcolors.GREEN + '[done]' + bcolors.ENDC)
-    print(t() + ' Starting new tor daemon '),
-    os.system('sudo -u debian-tor tor -f /etc/tor/torghostrc > /dev/null'
-              )
-    print(bcolors.GREEN + '[done]' + bcolors.ENDC)
-    print(t() + ' setting up iptables rules'),
-
-    iptables_rules = \
-        """
-	NON_TOR="192.168.1.0/24 192.168.0.0/24"
-	TOR_UID=%s
-	TRANS_PORT="9040"
-
-	iptables -F
-	iptables -t nat -F
-
-	iptables -t nat -A OUTPUT -m owner --uid-owner $TOR_UID -j RETURN
-	iptables -t nat -A OUTPUT -p udp --dport 53 -j REDIRECT --to-ports 5353
-	for NET in $NON_TOR 127.0.0.0/9 127.128.0.0/10; do
-	 iptables -t nat -A OUTPUT -d $NET -j RETURN
-	done
-	iptables -t nat -A OUTPUT -p tcp --syn -j REDIRECT --to-ports $TRANS_PORT
-
-	iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-	for NET in $NON_TOR 127.0.0.0/8; do
-	 iptables -A OUTPUT -d $NET -j ACCEPT
-	done
-	iptables -A OUTPUT -m owner --uid-owner $TOR_UID -j ACCEPT
-	iptables -A OUTPUT -j REJECT
-	""" \
-        % subprocess.getoutput('id -ur debian-tor')
-
-    os.system(iptables_rules)
-    print(bcolors.GREEN + '[done]' + bcolors.ENDC)
-    print(t() + ' Fetching current IP...')
-    print(t() + ' CURRENT IP : ' + bcolors.GREEN + ip() + bcolors.ENDC)
+        sys.exit(0)
 
 
 def stop_torghost():
-    print(bcolors.RED + t() + 'STOPPING torghost' + bcolors.ENDC)
-    print(t() + ' Flushing iptables, resetting to default'),
-    os.system('mv /etc/resolv.conf.bak /etc/resolv.conf')
-    IpFlush = \
+    check_root_user = check_root()
+    if check_root_user:
+        print(bcolors.RED + t() + 'STOPPING torghost' + bcolors.ENDC)
+        print(t() + ' Flushing iptables, resetting to default'),
+        os.system('mv /etc/resolv.conf.bak /etc/resolv.conf')
+        IpFlush = \
+            """
+        iptables -P INPUT ACCEPT
+        iptables -P FORWARD ACCEPT
+        iptables -P OUTPUT ACCEPT
+        iptables -t nat -F
+        iptables -t mangle -F
+        iptables -F
+        iptables -X
         """
-	iptables -P INPUT ACCEPT
-	iptables -P FORWARD ACCEPT
-	iptables -P OUTPUT ACCEPT
-	iptables -t nat -F
-	iptables -t mangle -F
-	iptables -F
-	iptables -X
-	"""
-    os.system(IpFlush)
-    os.system('sudo fuser -k 9051/tcp > /dev/null 2>&1')
-    print(bcolors.GREEN + '[done]' + bcolors.ENDC)
-    print(t() + ' Restarting Network manager'),
-    os.system('service network-manager restart')
-    print(bcolors.GREEN + '[done]' + bcolors.ENDC)
-    print(t() + ' Fetching current IP...')
-    time.sleep(3)
-    print(t() + ' CURRENT IP : ' + bcolors.GREEN + ip() + bcolors.ENDC)
+        os.system(IpFlush)
+        os.system('fuser -k 9051/tcp > /dev/null 2>&1')
+        print(bcolors.GREEN + '[done]' + bcolors.ENDC)
+        print(t() + ' Restarting Network manager'),
+        os.system('service network-manager restart')
+        print(bcolors.GREEN + '[done]' + bcolors.ENDC)
+        print(t() + ' Fetching current IP...')
+        time.sleep(3)
+        #print(t() + ' CURRENT IP : ' + bcolors.GREEN + ip() + bcolors.ENDC)
+    else:
+        sys.exit(0)
 
 
 def switch_tor():
@@ -230,7 +241,6 @@ def check_update():
 
 
 def main():
-    check_root()
     if len(sys.argv) <= 1:
         check_update()
         usage()
