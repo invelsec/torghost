@@ -1,7 +1,7 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 
-import os
+import os, threading
 import sys
 import getopt
 from requests import get
@@ -66,6 +66,7 @@ def usage():
     -x    --stop        Stop Torghost
     -h    --help        print(this help and exit)
     -u    --update      check for update
+    -l    --loop        According to the given time changes tor relay
 
     """)
     sys.exit()
@@ -90,6 +91,13 @@ def check_root() -> bool:
         print("You must be root; Say the magic word 'sudo' or use 'root' user.")
         return False
 
+
+def loopConnection(loop_time):
+    print(t() + "Connection Established!")
+    loop_time = int(loop_time) * 60 # Minute to Second
+    print(t() + f"Node Changed Every {int(loop_time)} Seconds")
+    timer = threading.Timer(int(loop_time),switch_tor)
+    timer.start()
 
 signal.signal(signal.SIGINT, sigint_handler)
 
@@ -131,11 +139,11 @@ def start_torghost():
                 print(bcolors.GREEN + '[done]' + bcolors.ENDC)
 
         print(t() + ' Stopping tor service '),
-        os.system('service tor stop')
-        os.system('fuser -k 9051/tcp > /dev/null 2>&1')
+        os.system('sudo systemctl stop tor')
+        os.system('sudo fuser -k 9051/tcp > /dev/null 2>&1')
         print(bcolors.GREEN + '[done]' + bcolors.ENDC)
         print(t() + ' Starting new tor daemon '),
-        os.system('tor -f /etc/tor/torghostrc > /dev/null'
+        os.system('sudo -u debian-tor tor -f /etc/tor/torghostrc > /dev/null'
                 )
         print(bcolors.GREEN + '[done]' + bcolors.ENDC)
         print(t() + ' setting up iptables rules'),
@@ -168,7 +176,7 @@ def start_torghost():
         os.system(iptables_rules)
         print(bcolors.GREEN + '[done]' + bcolors.ENDC)
         print(t() + ' Fetching current IP...')
-        #print(t() + ' CURRENT IP : ' + bcolors.GREEN + ip() + bcolors.ENDC)
+        print(t() + ' CURRENT IP : ' + bcolors.GREEN + ip() + bcolors.ENDC)
     else:
         sys.exit(0)
 
@@ -190,14 +198,14 @@ def stop_torghost():
         iptables -X
         """
         os.system(IpFlush)
-        os.system('fuser -k 9051/tcp > /dev/null 2>&1')
+        os.system('sudo fuser -k 9051/tcp > /dev/null 2>&1')
         print(bcolors.GREEN + '[done]' + bcolors.ENDC)
         print(t() + ' Restarting Network manager'),
-        os.system('service network-manager restart')
+        os.system('service networking restart')
         print(bcolors.GREEN + '[done]' + bcolors.ENDC)
         print(t() + ' Fetching current IP...')
         time.sleep(3)
-        #print(t() + ' CURRENT IP : ' + bcolors.GREEN + ip() + bcolors.ENDC)
+        print(t() + ' CURRENT IP : ' + bcolors.GREEN + ip() + bcolors.ENDC)
     else:
         sys.exit(0)
 
@@ -246,10 +254,9 @@ def main():
         usage()
     try:
         (opts, args) = getopt.getopt(sys.argv[1:], 'srxhu', [
-            'start', 'stop', 'switch', 'help', 'update'])
+            'start', 'stop', 'switch', 'help', 'update', 'loop'])
     except (getopt.GetoptError):
         usage()
-        sys.exit(2)
     for (o, a) in opts:
         if o in ('-h', '--help'):
             usage()
@@ -261,6 +268,13 @@ def main():
             switch_tor()
         elif o in ('-u', '--update'):
             check_update()
+        elif o in ('-l', '--loop'):
+            if args:
+                start_torghost()
+                loopConnection(args[0])
+            else:
+                print("Please give time (time -> minutes)")
+                sys.exit(2)
         else:
             usage()
 
